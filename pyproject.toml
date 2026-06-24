@@ -8,6 +8,9 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "minigrid>=3.1.0",
+    "pillow>=12.2.0",
+    "stable-baselines3>=2.9.0",
+    "torch>=2.12.1",
 ]
 
 [project.scripts]
@@ -16,3 +19,8 @@ minigridrl = "minigridrl:main"
 [build-system]
 requires = ["uv_build>=0.9.22,<0.10.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.3.0",
+]
