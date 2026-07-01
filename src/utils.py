@@ -164,7 +164,7 @@ def collect_environment() -> dict[str, Any]:
 
 
 def seed_everything(seed: int):
-    print(" >> Setting up randome seed", seed)
+    print(" >> Setting up random seed", seed)
     import numpy as np
     import random
     import torch
@@ -172,5 +172,6 @@ def seed_everything(seed: int):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)

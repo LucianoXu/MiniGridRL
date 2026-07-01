@@ -3,6 +3,11 @@ It has a complete training, evaluation and demonstration pipeline, and let the u
 
 Observability, extendability and reproducibility are principal concerns of the framework design.
 
+## RL Related
+
+- We focus on MiniGrid. The observation space is the 7 * 7 * 3 uint8 image only. The action space is Discrete(7). This applies everywhere.
+- For agents, it should accept the uint8 input, and output the int action directly. It's the agents' internal responsibility to decide how to convert.
+
 ## Requirements
 
 The whole playground project should be working on both Mac and Linux.
