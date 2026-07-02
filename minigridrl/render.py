@@ -9,6 +9,18 @@ the ``rollout`` tag via ``SummaryWriter.add_video``.
 
 from __future__ import annotations
 
+import os
+
+# TensorBoard's `add_video` imports `moviepy.editor`, which imports
+# `moviepy.video.io.preview` -- a module whose body runs `pygame.init()`. That
+# initializes pygame's *video* subsystem with a real, windowed SDL driver
+# (e.g. "cocoa" on macOS), which spawns an app in the Dock and can steal focus,
+# even though we only ever encode a GIF and never show a window. Forcing SDL's
+# headless "dummy" driver before that import chain runs keeps video recording
+# side-effect free. `setdefault` leaves an explicit user override untouched.
+os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+
 from typing import Callable
 
 import gymnasium as gym

@@ -1,3 +1,5 @@
+import subprocess
+import sys
 import tempfile
 
 import numpy as np
@@ -87,6 +89,31 @@ def test_compose_frame_centers_smaller_panel_without_upscaling():
     assert _BG_COLOR != (0, 0, 0)
     # center of the right panel falls inside the observation
     assert tuple(right[400, 400]) == (200, 0, 0)
+
+
+def test_video_path_does_not_open_a_display_window():
+    # torch's add_video imports `moviepy.editor`, which imports
+    # `moviepy.video.io.preview`, whose module body runs `pygame.init()`. That
+    # initializes pygame's *video* subsystem with a real, windowed driver
+    # (e.g. "cocoa" on macOS -> an app appears in the Dock and can steal focus).
+    # Importing `minigridrl.render` must pre-empt this by forcing SDL's headless
+    # dummy driver, so recording a video never opens a window.
+    #
+    # pygame's init state is process-global, so this is checked in a fresh
+    # subprocess that mirrors the import order of the training/video path.
+    script = (
+        "import minigridrl.render\n"          # must set SDL_VIDEODRIVER first
+        "import moviepy.editor\n"             # triggers pygame.init()
+        "import pygame\n"
+        "print(pygame.display.get_driver())\n"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert out.stdout.strip() == "dummy", out.stdout + out.stderr
 
 
 def test_record_rollout_video_smoke():

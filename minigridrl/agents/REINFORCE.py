@@ -98,6 +98,8 @@ class REINFORCE(RLAgent):
         env_fn: Callable[[], gym.Env],
         working_dir: str | Path,
 
+        ent_coef: float = 0.0,
+
         num_timesteps: int = 1000,
         n_envs: int = 1,
         save_interval: int | None = None,
@@ -179,7 +181,7 @@ class REINFORCE(RLAgent):
                 lp[ongoing_mask] = selected_lp
 
                 ent = torch.zeros(n_envs)
-                ent[ongoing_mask] = selected_ent.detach()   # logging only, keep out of the graph
+                ent[ongoing_mask] = selected_ent
 
                 obs, rewards, completed, truncated, _ = envs.step(acts)
 
@@ -230,7 +232,8 @@ class REINFORCE(RLAgent):
             )
 
             # build the surrogate loss
-            J = - (advantages * lp_trace).sum(dim=1).mean()
+            # here we have to use mean_entropy (per action) although it is not consistent with the reward term calculated according to episode.
+            J = - (advantages * lp_trace).sum(dim=1).mean() - ent_coef * mean_entropy
 
             progress_bar.set_postfix(
                 {

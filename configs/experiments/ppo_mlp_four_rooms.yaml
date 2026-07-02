@@ -1,0 +1,58 @@
+config_type: rl_train
+
+working_dir: trials/ppo_mlp_four_rooms
+
+rl_training_dir: rl_training
+
+# ---- environment (env_factory): describes ONE env; n_envs lives in training_cfg ----
+envs:
+  id: MiniGrid-FourRooms-v0
+  env_kwargs:
+    max_steps: 512
+
+# ---- agent (agent_factory -> PPO) ----
+agent:
+  id: PPO
+  lr: 0.0003
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+  weight_decay: 0.0
+  grad_norm_clip: 0.5
+
+  # ---- PPO algorithm hyperparameters ----
+  gamma: 0.99
+  gae_lambda: 0.99
+  clip_range: 0.2
+  clip_range_vf: null
+  n_epochs: 10
+  num_minibatches: 4
+  vf_coef: 0.5
+  ent_coef: 0.01
+  normalize_advantage: true
+  target_kl: 0.02
+
+  # ---- policy model (model_factory -> MLP) ----
+  model:
+    id: MLP
+    d_obj: 8
+    d_color: 4
+    d_state: 2
+    hidden_dims: [96, 48]
+
+  # ---- value model (model_factory -> ValueMLP) ----
+  value_model:
+    id: ValueMLP
+    d_obj: 8
+    d_color: 4
+    d_state: 2
+    hidden_dims: [96, 48]
+
+# ---- passed as **kwargs to PPO.train() ----
+training_cfg:
+  num_timesteps: 5000000
+  n_envs: 32
+  n_steps: 256
+  save_interval: null
+  video_interval: 200000
+  video_fps: 5
+  seed: 42

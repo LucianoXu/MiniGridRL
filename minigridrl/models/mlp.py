@@ -38,3 +38,37 @@ class MLP(RLModule):
         emb = self.layers(emb)
 
         return emb
+
+
+class ValueMLP(nn.Module):
+    '''
+    State-value critic ``V(obs)`` for actor-critic agents (PPO/A2C). Independent
+    of the policy network -- its own embedding + trunk -- so policy and value
+    gradients never interfere. Output is a scalar per observation.
+    '''
+    def __init__(self,
+                 d_obj: int = 8,
+                 d_color: int = 4,
+                 d_state: int = 2,
+                 hidden_dims: Sequence[int] = (96,)):
+        super().__init__()
+
+        self.hidden_dims = copy.copy(hidden_dims)
+        self.embedding = GridEmbedding(d_obj, d_color, d_state)
+
+        current_dim = self.embedding.entire_embedding_dim
+
+        layers = []
+        for i in range(len(hidden_dims)):
+            layers.append(nn.Linear(current_dim, hidden_dims[i]))
+            layers.append(nn.ReLU())
+            current_dim = hidden_dims[i]
+
+        layers.append(nn.Linear(current_dim, 1))
+
+        self.layers = nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        emb = self.embedding(x)
+        value = self.layers(emb)         # (batch, 1)
+        return value.reshape(-1)         # (batch,)

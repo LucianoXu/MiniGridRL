@@ -25,7 +25,7 @@ def _build_single_env(cfg: dict[str, Any]) -> Callable[[], gym.Env]:
     id = cfg['id']
     env_kwargs = cfg.get('env_kwargs', {})
 
-    if id == 'MiniGrid-Empty-5x5-v0':
+    if id in ['MiniGrid-Empty-5x5-v0', 'MiniGrid-FourRooms-v0']:
         # Registered id (size pinned to 5); goes through gym.make.
         disable_env_checker = cfg.get('disable_env_checker', False)
 
@@ -34,6 +34,7 @@ def _build_single_env(cfg: dict[str, Any]) -> Callable[[], gym.Env]:
                 id,
                 render_mode="rgb_array",
                 disable_env_checker=disable_env_checker,
+                **env_kwargs,
             )
 
     elif id == 'MiniGrid-EmptyEnv':

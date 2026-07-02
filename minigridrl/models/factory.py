@@ -22,7 +22,19 @@ def model_factory(cfg: dict[str, Any]):
         )
 
         return model
-    
+
+    elif id == 'ValueMLP':
+        from .mlp import ValueMLP
+
+        model = ValueMLP(
+            d_obj = cfg['d_obj'],
+            d_color = cfg['d_color'],
+            d_state = cfg['d_state'],
+            hidden_dims = cfg['hidden_dims']
+        )
+
+        return model
+
     else:
         raise ValueError("Unsupported Model ID:", id)
 
