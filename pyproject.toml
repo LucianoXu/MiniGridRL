@@ -7,12 +7,15 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "array-api-compat>=1.15.0",
     "minigrid>=3.1.0",
     "pillow>=12.2.0",
     "pyyaml>=6.0.3",
     "stable-baselines3>=2.9.0",
     "tensorboard>=2.20.0",
+    "torch-tb-profiler>=0.2.0",
     "torch>=2.12.1",
+    "tqdm>=4.68.3",
 ]
 
 [project.scripts]
@@ -21,6 +24,12 @@ minigridrl = "minigridrl:main"
 [build-system]
 requires = ["uv_build>=0.9.22,<0.10.0"]
 build-backend = "uv_build"
+
+[tool.uv.build-backend]
+# The importable package lives directly at ./minigridrl (repo root), not the
+# default ./src/minigridrl. Point the build backend at it explicitly.
+module-name = "minigridrl"
+module-root = ""
 
 [dependency-groups]
 dev = [

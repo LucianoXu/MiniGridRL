@@ -1,0 +1,34 @@
+config_type: rl_train
+
+working_dir: trials/reinforce_mlp_empty5x5
+
+rl_training_dir: rl_training
+
+# ---- environment (env_factory) ----
+envs:
+  id: MiniGrid-Empty-5x5-v0
+  disable_env_checker: True
+  n_envs: 16
+
+# ---- agent (agent_factory -> REINFORCE) ----
+agent:
+  id: REINFORCE
+  lr: 0.001
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+  weight_decay: 0.0
+  grad_norm_clip: 1.0
+
+  # ---- policy model (model_factory -> MLP) ----
+  model:
+    id: MLP
+    d_obj: 8
+    d_color: 4
+    d_state: 2
+    hidden_dims: [96]
+
+# ---- passed as **kwargs to REINFORCE.train() ----
+training_cfg:
+  num_timesteps: 100000
+  save_interval: null
+  seed: 42
