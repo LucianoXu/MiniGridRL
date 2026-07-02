@@ -1,13 +1,15 @@
 config_type: rl_train
 
-working_dir: trials/reinforce_mlp_empty5x5
+working_dir: trials/reinforce_mlp_empty
 
 rl_training_dir: rl_training
 
 # ---- environment (env_factory): describes ONE env; n_envs lives in training_cfg ----
 envs:
-  id: MiniGrid-Empty-5x5-v0
-  disable_env_checker: True
+  id: MiniGrid-EmptyEnv
+  env_kwargs:
+    size: 9
+    agent_start_pos: null
 
 # ---- agent (agent_factory -> REINFORCE) ----
 agent:
@@ -24,11 +26,11 @@ agent:
     d_obj: 8
     d_color: 4
     d_state: 2
-    hidden_dims: [96]
+    hidden_dims: [96, 48]
 
 # ---- passed as **kwargs to REINFORCE.train() ----
 training_cfg:
-  num_timesteps: 100000
+  num_timesteps: 500000
   n_envs: 16
   save_interval: null
   video_interval: 20000

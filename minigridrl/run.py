@@ -4,7 +4,7 @@
     from minigridrl import run
     run("configs/experiments/ppo_empty5x5.yaml")
 """
-
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +14,7 @@ from .models import model_factory
 from .agents import agent_factory
 from .experiments.rl_train import rl_train
 
-def run(args: dict | str | Path):
+def run(args: dict | str | Path, overwrite = False):
     """
     Load (if needed) and dispatch a config.
     """
@@ -44,6 +44,19 @@ def run(args: dict | str | Path):
 
         # all subsequent paths will be considered relative to the working_dir
         working_dir = Path(cfg['working_dir'])
+        print(" >> Working directory:", working_dir)
+
+        if working_dir.exists():
+
+            if overwrite:
+                print(" >> Cleaning up existing working directory.")
+                shutil.rmtree(working_dir)
+            else:
+                raise FileExistsError(
+                    f"Working directory already exists: {working_dir}. "
+                    f"Use overwrite=True to remove it."
+                )            
+
         working_dir.mkdir(parents=True, exist_ok=False)
 
         # output yaml to the working dir as a record

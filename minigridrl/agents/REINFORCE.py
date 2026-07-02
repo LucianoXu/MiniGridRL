@@ -1,9 +1,9 @@
 from pathlib import Path
+from typing import Callable
 import time
 
 import gymnasium as gym
 from gymnasium.vector import AutoresetMode
-from gymnasium.wrappers.vector import NumpyToTorch
 
 import torch
 from torch import nn
@@ -11,6 +11,7 @@ from torch.optim import Adam
 
 from .interface import RLAgent
 from ..models.interface import RLModule
+from ..render import record_rollout_video
 
 from torch.utils.tensorboard import SummaryWriter
 
@@ -94,31 +95,47 @@ class REINFORCE(RLAgent):
 
     def train(
         self,
-        envs: gym.vector.AsyncVectorEnv,
+        env_fn: Callable[[], gym.Env],
         working_dir: str | Path,
 
         num_timesteps: int = 1000,
+        n_envs: int = 1,
         save_interval: int | None = None,
+        video_interval: int | None = None,
+        video_fps: int = 8,
         seed: int = 42,
     ):
         '''
+        env_fn:
+            a single-env constructor; vectorized here into ``n_envs`` parallel
+            copies under NEXT_STEP autoreset semantics.
         policy:
             input: batched observation, torch.Tensor type
             output: tuple of batched actions, log_probabilities, torch.Tensor type each.
+        video_interval:
+            if set, record a roll-out video to TensorBoard roughly every
+            ``video_interval`` env timesteps (plus one baseline at step 0).
+            ``None`` disables video recording.
         '''
 
-        envs = NumpyToTorch(envs)
-        n_envs = envs.num_envs
+        envs = self.vectorize(env_fn, n_envs)
 
         if envs.metadata['autoreset_mode'] != AutoresetMode.NEXT_STEP:
             raise ValueError("This training requires NEXT_STEP AutoresetMode of the gym envs.")
-        
+
         self.policy.train()
 
         # create the summary writer
         working_dir = Path(working_dir)
         writer = SummaryWriter(working_dir)
-        
+
+        # baseline roll-out video before any training
+        last_video_timestep = self.timesteps
+        if isinstance(video_interval, int):
+            record_rollout_video(
+                self, env_fn, writer, self.timesteps, seed=seed, fps=video_fps
+            )
+
         obs, info = envs.reset(seed=seed)
         
 
@@ -267,7 +284,14 @@ class REINFORCE(RLAgent):
             if isinstance(save_interval, int) and self.timesteps - last_save_timestep > save_interval:
                 self.save_local(working_dir / f"{self.timesteps}.pt")
                 last_save_timestep = self.timesteps
-                
+
+            # periodic roll-out video
+            if isinstance(video_interval, int) and self.timesteps - last_video_timestep > video_interval:
+                record_rollout_video(
+                    self, env_fn, writer, self.timesteps, seed=seed, fps=video_fps
+                )
+                last_video_timestep = self.timesteps
+
 
         # save the final ckpt
         self.save_local(working_dir / "final.pt")

@@ -1,10 +1,34 @@
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import Callable
+
 import gymnasium as gym
+from gymnasium.vector import AsyncVectorEnv, AutoresetMode
+from gymnasium.wrappers.vector import NumpyToTorch
 from torch.utils.tensorboard import SummaryWriter
 
 
 class RLAgent(ABC):
+
+    @staticmethod
+    def vectorize(
+        env_fn: Callable[[], gym.Env],
+        n_envs: int,
+    ) -> gym.vector.VectorEnv:
+        '''
+        Vectorize a single-env constructor into a training-ready vector env:
+        ``n_envs`` parallel copies under NEXT_STEP autoreset semantics, wrapped
+        with ``NumpyToTorch`` so observations/actions cross as torch tensors.
+
+        Vectorization lives here (the training site), not in ``env_factory``:
+        the env config describes one env; how many run in parallel is a training
+        concern shared across agents.
+        '''
+        venv = AsyncVectorEnv(
+            [env_fn] * n_envs,
+            autoreset_mode=AutoresetMode.NEXT_STEP,
+        )
+        return NumpyToTorch(venv)
 
     @staticmethod
     def tensorboard_write(
@@ -33,8 +57,8 @@ class RLAgent(ABC):
 
     @abstractmethod
     def train(
-        self, 
-        envs: gym.vector.VectorEnv,
+        self,
+        env_fn: Callable[[], gym.Env],
         working_dir: str | Path
     ):
         ...
