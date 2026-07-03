@@ -80,11 +80,11 @@ class IntrinsicReward(ABC):
         """用收集到的有效 transition 训练自身网络,返回 loss 指标供 TensorBoard。
            契约:必须在同一批数据的 compute_intrinsic 之后调用
            (LPM 依赖'先用当前模型算奖励、再更新模型'的时序)。"""
-
-    def state_dict(self) -> dict: ...
-    def load_state_dict(self, sd: dict) -> None: ...
-    def to(self, device) -> "IntrinsicReward": ...
 ```
+
+接口只有 `beta` 属性 + 两个方法。**checkpoint 靠整体 pickle**:PPO 的 `save_local` 已经用
+`weights_only=False` pickle 了整个 `policy`/`value_net` 对象,内在模块(持有 nn.Module + Adam +
+running-stats,均可 pickle)照此整体存取即可,无需单独 `state_dict`。
 
 **为什么是两个方法而非一个 `process(...)`**:强制正确时序。agent 主循环里顺序固定为
 `compute_intrinsic → 用 r_total 做 RL 更新 → update`。此序对 RND/ICM 无所谓,对 **LPM 是必须**的
@@ -98,11 +98,14 @@ class IntrinsicReward(ABC):
 
 ### RND(第 1 阶段)
 
-- 两个网络 `target`(冻结随机)、`predictor`(可训),结构相同:`GridEmbedding → MLP → R^k`(k≈128)。
-- obs 归一化:对输入做 running mean/std 标准化并 clip(RND 对此强依赖)。
-- `compute_intrinsic`:`r_int = ‖predictor(s') − target(s')‖²`(仅用 `next_obs`),
-  再除以内在奖励的 running std(`RunningMeanStd`)做归一化,让 β 可跨环境调。
-- `update`:对同批 `s'` 最小化 `‖predictor − target‖²`(target 不回传梯度)。自带 Adam。
+- 两个网络 `target`(冻结随机)、`predictor`(可训),结构相同:`GridEmbedding → MLP → R^k`(k≈128),
+  用共享的 `GridEncoder`(见下"共享工具")。
+- **obs 归一化的调整**:RND 原版对像素输入做 running mean/std 标准化;但本项目 obs 经 `GridEmbedding`
+  的整数索引查表(需整数),无法在查表前标准化整数索引。故**放弃对原始 obs 的标准化**(MiniGrid 取值小且
+  有界,embedding 已承担表示),仅保留下面的**内在奖励归一化**。
+- `compute_intrinsic`:`r_int = ‖predictor(s') − target(s')‖²`(逐样本对特征维求均值,仅用 `next_obs`),
+  再除以内在奖励的 running std(`RunningMeanStd`,shape=())做归一化,让 β 可跨环境调。
+- `update`:对同批 `s'` 最小化 `‖predictor − target.detach()‖²`。自带 Adam。
 
 ### ICM(第 2 阶段)
 
@@ -117,10 +120,13 @@ class IntrinsicReward(ABC):
 
 映射到 on-policy 设定:环境步 `t`,模型更新步 `τ` 对齐"每次 RL 更新一次"(每个 rollout 一次)。
 
-- dynamics 模型 `f_θ`:`(o_t, a_t) → ô_{t+1}`(编码器 + 以 `onehot(a)` 为条件的解码/预测头)。
-- error 模型 `g_ψ`:`(o_t, a_t) → R`,预测**上一轮** dynamics 的期望 log-MSE。
+- **MiniGrid 适配**:论文 dynamics 预测原始下一观测;这里 obs 是 7×7×3 整数栅格(类别型,直接回归/解码不自然)。
+  改为在**固定随机编码器** `ψ`(冻结 `GridEncoder`,类比 RND target)的特征空间里做预测——`ψ` 固定保证
+  target 不塌缩、`ε` 有定义。
+- dynamics 模型 `f_θ`:`[ψ(o_t), onehot(a_t)] → ψ̂(o_{t+1})`(在 `ψ` 特征空间预测下一特征)。
+- error 模型 `g_ψ`:`[ψ(o_t), onehot(a_t)] → R`,预测**上一轮** dynamics 的期望 log-MSE。
 - 两个 buffer:replay buffer `B`(存 transition,拟合 `f`);定长队列 `D`(size d,存 `(o_t,a_t,ε)`,拟合 `g`)。
-- 逐步误差:`ε_t = log MSE(o_{t+1}, f_θ(o_t,a_t))`,用当前(=本轮更新前 = `f^(τ-1)`)模型算。
+- 逐步误差:`ε_t = log MSE(ψ(o_{t+1}), f_θ([ψ(o_t),onehot(a_t)]))`,用当前(=本轮更新前 = `f^(τ-1)`)模型算。
 - `compute_intrinsic`:`r_int = g_ψ(o_t,a_t) − ε_t`(若 `|D|=d` 否则 0,warmup);同时把
   `(o,a,o')→B`、`(o,a,ε)→D`。
 - `update`(RL 更新之后):用 `B` 更新 `f_θ → f^(τ)`;用 `D` 更新 `g_ψ` 去拟合队列里的 ε
@@ -192,7 +198,7 @@ agent:
 ```
 minigridrl/intrinsic/
   __init__.py
-  interface.py     # IntrinsicReward 抽象基类 + RunningMeanStd 工具
+  interface.py     # IntrinsicReward 抽象基类 + RunningMeanStd + build_mlp + GridEncoder(复用 GridEmbedding)
   factory.py       # intrinsic_reward_factory(cfg)
   rnd.py           # RND            (阶段 1)
   icm.py           # ICM            (阶段 2)
