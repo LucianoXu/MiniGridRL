@@ -36,6 +36,9 @@ def agent_factory(cfg: dict[str, Any]) -> RLAgent:
         policy = model_factory(cfg['model'])
         value_net = model_factory(cfg['value_model'])
 
+        from ..intrinsic import intrinsic_reward_factory
+        intrinsic = intrinsic_reward_factory(cfg.get('intrinsic_reward'))
+
         agent = PPO(
             policy = policy,
             value_net = value_net,
@@ -54,6 +57,7 @@ def agent_factory(cfg: dict[str, Any]) -> RLAgent:
             ent_coef = cfg['ent_coef'],
             normalize_advantage = cfg.get('normalize_advantage', True),
             target_kl = cfg.get('target_kl', None),
+            intrinsic = intrinsic,
         )
 
         return agent

@@ -1,0 +1,65 @@
+config_type: rl_train
+
+working_dir: trials/ppo_rnd_empty5x5
+
+rl_training_dir: rl_training
+
+# ---- environment (env_factory): describes ONE env; n_envs lives in training_cfg ----
+envs:
+  id: MiniGrid-Empty-5x5-v0
+  disable_env_checker: True
+
+# ---- agent (agent_factory -> PPO) ----
+agent:
+  id: PPO
+  lr: 0.0003
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+  weight_decay: 0.0
+  grad_norm_clip: 0.5
+
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  clip_range_vf: null
+  n_epochs: 10
+  num_minibatches: 4
+  vf_coef: 0.5
+  ent_coef: 0.01
+  normalize_advantage: true
+  target_kl: 0.02
+
+  model:
+    id: MLP
+    d_obj: 8
+    d_color: 4
+    d_state: 2
+    hidden_dims: [96, 48]
+
+  value_model:
+    id: ValueMLP
+    d_obj: 8
+    d_color: 4
+    d_state: 2
+    hidden_dims: [96, 48]
+
+  # ---- intrinsic reward (intrinsic_reward_factory -> RND); omit for pure extrinsic ----
+  intrinsic_reward:
+    id: RND
+    beta: 0.5
+    lr: 0.0001
+    feature_dim: 128
+    hidden_dims: [128]
+    d_obj: 8
+    d_color: 4
+    d_state: 2
+
+# ---- passed as **kwargs to PPO.train() ----
+training_cfg:
+  num_timesteps: 100000
+  n_envs: 16
+  n_steps: 128
+  save_interval: null
+  video_interval: 20000
+  video_fps: 8
+  seed: 42

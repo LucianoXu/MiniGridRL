@@ -63,6 +63,19 @@ def compute_gae(
     return advantages
 
 
+def build_next_obs(obs_buf: torch.Tensor, carry_obs: torch.Tensor) -> torch.Tensor:
+    '''
+    Build the per-step next-observation buffer from the stored obs trace.
+
+    ``obs_buf`` is ``(T, N, ...)`` (obs at each step); ``carry_obs`` is the
+    ``(N, ...)`` observation returned after the final step. Under NEXT_STEP
+    autoreset ``obs_buf[t+1]`` is the correct next observation for step ``t``
+    (the true terminal observation when step ``t`` is done); the trailing dummy
+    step is masked out of losses via ``valid``.
+    '''
+    return torch.cat([obs_buf[1:], carry_obs[None]], dim=0)
+
+
 class PPO(RLAgent):
     '''
     Proximal Policy Optimization (clipped) with a separate policy and value
@@ -103,6 +116,7 @@ class PPO(RLAgent):
         ent_coef: float = 0.0,
         normalize_advantage: bool = True,
         target_kl: float | None = None,
+        intrinsic=None,
     ):
         super().__init__()
 
@@ -135,6 +149,9 @@ class PPO(RLAgent):
             value_net.parameters(),
             lr = lr, betas = betas, eps = eps, weight_decay = weight_decay,
         )
+
+        self.intrinsic = intrinsic
+        self._int_batch = None
 
     # ---- hyperparameters that round-trip through a checkpoint ----
     def _hyperparams(self) -> dict:
@@ -171,6 +188,7 @@ class PPO(RLAgent):
                 "policy_optimizer_state": self.opt_policy.state_dict(),
                 "value_optimizer_state": self.opt_value.state_dict(),
                 "timesteps": self.timesteps,
+                "intrinsic": self.intrinsic,
                 "hyperparams": self._hyperparams(),
             },
             pt_path,
@@ -190,6 +208,7 @@ class PPO(RLAgent):
         agent = cls(
             policy=ckpt["policy"],
             value_net=ckpt["value_net"],
+            intrinsic=ckpt.get("intrinsic"),
             **ckpt["hyperparams"],
         )
         agent.opt_policy.load_state_dict(ckpt["policy_optimizer_state"])
@@ -377,6 +396,32 @@ class PPO(RLAgent):
             "explained_variance": explained_variance,
         }
 
+    def _apply_intrinsic(self, buffers, carry_obs) -> dict[str, float]:
+        '''
+        Compute the intrinsic bonus over valid transitions and fold
+        ``beta * r_int`` into ``buffers["rew"]`` in place, before GAE. The valid
+        transition batch is stashed on ``self._int_batch`` so the post-update
+        ``intrinsic.update`` call (in ``train``) sees the same data -- preserving
+        the compute-before-update ordering LPM requires.
+        '''
+        next_obs = build_next_obs(buffers["obs"], carry_obs)     # (T, N, ...)
+        valid = buffers["valid"].reshape(-1)                     # (T*N,)
+        obs_v = buffers["obs"].reshape(-1, *buffers["obs"].shape[2:])[valid]
+        act_v = buffers["act"].reshape(-1)[valid]
+        next_v = next_obs.reshape(-1, *next_obs.shape[2:])[valid]
+
+        r_int = self.intrinsic.compute_intrinsic(obs_v, act_v, next_v)  # (M,)
+
+        flat = buffers["rew"].reshape(-1)                        # view; in-place edit
+        flat[valid] = flat[valid] + self.intrinsic.beta * r_int
+
+        self._int_batch = (obs_v, act_v, next_v)
+        return {
+            "intrinsic_reward_mean": r_int.mean().item(),
+            "intrinsic_reward_std": r_int.std().item() if r_int.numel() > 1 else 0.0,
+            "beta": float(self.intrinsic.beta),
+        }
+
     def train(
         self,
         env_fn: Callable[[], gym.Env],
@@ -444,7 +489,18 @@ class PPO(RLAgent):
             self.timesteps += collected
             progress_bar.update(collected)
 
+            # intrinsic bonus folded into rewards BEFORE GAE (no-op if disabled)
+            int_metrics: dict[str, float] = {}
+            if self.intrinsic is not None:
+                int_metrics = self._apply_intrinsic(buffers, obs)
+
             diag = self._update(buffers)
+
+            # train the intrinsic module AFTER the PPO update (LPM ordering)
+            if self.intrinsic is not None:
+                obs_v, act_v, next_v = self._int_batch
+                int_metrics.update(self.intrinsic.update(obs_v, act_v, next_v))
+
             n_updates += 1
 
             # rollout-level episode statistics (completed episodes only)
@@ -491,6 +547,7 @@ class PPO(RLAgent):
                 fps=fps,
                 time_elapsed=time_elapsed,
                 n_updates=n_updates,
+                **int_metrics,
             )
 
             if isinstance(save_interval, int) and self.timesteps - last_save_timestep > save_interval:
