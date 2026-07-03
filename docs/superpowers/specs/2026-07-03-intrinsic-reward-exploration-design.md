@@ -19,14 +19,14 @@
 LPM 论文附录 B 正是在 **MiniGrid(Lava Crossing)+ PPO** 上对比 ICM vs LPM,所以本 playground
 就是它的合法测试床。核心关注点承自 `SPEC.md`:可观测性、可扩展性、可复现性。
 
-## 本次采用的默认(待用户确认,可推翻)
+## 本次采用的决定(用户已确认)
 
-用户在澄清阶段暂时离开,以下三个分叉按最合理默认推进,已在设计中标注:
-
-1. **接入点 = 先挂到现有 REINFORCE**。改动最小、最快验证 seam。接口设计成未来 `OnPolicyAgent`
-   (A2C/PPO)也能原样复用。
-2. **奖励合并 = 单一合并回报** `r_total = r_ext + β·r_int`,一条 return 流。REINFORCE 无 critic,
-   RND 原版的"内在/外在双 value head + 各自 discount"与当前无 critic 结构不兼容,留到 A2C 阶段。
+1. **接入点 = 现有 PPO**(用户指定,不在 REINFORCE 上做)。PPO(`agents/PPO.py`)已具备完整的
+   time-major rollout buffer 与 critic,是内在奖励最自然的宿主;LPM 论文附录 B 也正是 PPO+GAE 设置。
+   接口以"一批 transition"为单位,未来 A2C 或其他 on-policy agent 也能原样复用。
+2. **奖励合并 = 单一合并回报** `r_total = r_ext + β·r_int`,一条 return 流:把 `β·r_int` 加进
+   `buffers["rew"]` 后照常走 GAE,单 critic 学合成回报的 value。这与 LPM 论文的 MiniGrid+PPO 设置一致。
+   PPO 已有 critic,故 RND 原版的"内在/外在双 value head + 各自 discount"**未来可选升级**,本次不做。
 3. **spec 范围 = 抽象与三种方法全部完整设计**;代码按 **RND → ICM → LPM** 递增复杂度分阶段实现,
    每阶段独立可验证。
 
@@ -36,15 +36,15 @@ LPM 论文附录 B 正是在 **MiniGrid(Lava Crossing)+ PPO** 上对比 ICM vs L
 - `IntrinsicReward` 抽象基类(`compute_intrinsic` + `update` 两个核心方法 + checkpoint/设备)。
 - 三种方法的完整设计:RND / ICM / LPM 的网络结构、奖励公式、自身 loss、内部状态。
 - 共享工具:`RunningMeanStd`(内在奖励归一化,RND 强依赖)。
-- REINFORCE 收集循环的最小改动:存 `(obs, act, next_obs)` trace,在有效步(`step_mask`)上算奖励和训练。
+- PPO 训练循环的最小改动:从已有 rollout buffer 取出有效 transition,合成 `r_total` 后再走 GAE;
+  RL 更新后调 `intrinsic.update`。缺省(无 intrinsic)行为与改动前完全一致。
 - factory / config 集成:`intrinsic_reward_factory(cfg)`,`agent.intrinsic_reward` 配置块,缺省 = 纯外在。
-- TensorBoard 内在奖励诊断指标。
+- TensorBoard 内在奖励诊断指标;内在模块随 PPO checkpoint 一起 save/load。
 
 **不做(YAGNI):**
-- 双 value head / 内在-外在分离 discount —— 留到 A2C/PPO 阶段。
+- 双 value head / 内在-外在分离 discount —— PPO 已有 critic,留作未来可选升级。
 - episodic bonus 类方法(NGU / EDT / count-based)—— 本批三种都是 global 非 episodic。
 - noisy-TV 环境注入 wrapper —— 见"未来"一节,LPM 的优势要靠它才显现,列为紧接着的后续项。
-- RolloutBuffer 大重构 —— 见下文,本次只做 REINFORCE 局部改动,但接口对齐未来 buffer。
 
 ## 三种方法的统一坐标系
 
@@ -130,20 +130,35 @@ class IntrinsicReward(ABC):
   可能在 IG>0 时变负,破坏与信息增益的单调关系。实现里体现为"`g` 拟合 D 中一批 ε 的回归",而非
   "存一份旧 `f` 直接推理"。
 
-## 集成:REINFORCE 收集循环改动
+## 集成:PPO 训练循环改动
 
-当前 `REINFORCE.train`(`agents/REINFORCE.py`)的收集循环**只存了 reward / log_prob / entropy,没存
-obs trace**。内在奖励需要 `(s_t, a_t, s_{t+1})` 三元组,所以:
+好消息:PPO(`agents/PPO.py`)的 `_collect_rollout` **已经**把 `obs / act / rew / valid` 等按
+time-major `(T, N, …)` 存进了 buffer,并返回 rollout 结束后的 carry-over `obs`。内在奖励需要的
+`(s_t, a_t, s_{t+1})` 三元组几乎是现成的,**无需 RolloutBuffer 重构**。
 
-1. 收集时新增存储:每步的 `obs`(即 `s_t`)、`acts`(`a_t`),下一步的 `obs` 即 `s_{t+1}`。
-2. 尊重变长 episode 的 `step_mask`:只在有效步上抽出 transition 送去算奖励与训练(把有效步 flatten 成 `(N, …)`)。
-3. 主循环顺序:`compute_intrinsic` 得到 `r_int` → `r_total = r_ext + β·r_int` → 用 `r_total` 走现有
-   reward-to-go / baseline / surrogate loss → `intrinsic.update(...)` → log `intrinsic` 指标。
-4. `intrinsic is None` 时完全走现有纯外在路径(零行为变化)。
+**取 `next_obs`(关键正确性点)**:对时间步 `t`,`next_obs[t] = obs[t+1]`(`t < T-1`),
+`next_obs[T-1] = carry_over_obs`。在 NEXT_STEP autoreset 下这是正确的:当 `done[t]=True`,`obs[t+1]`
+恰是该 episode 的**真实终止观测**(PPO 的 GAE 注释已依赖这一语义来 bootstrap 截断),而紧随其后的
+autoreset dummy 步由 `valid=False` 屏蔽。因此我们**只在 `valid` 步上**计算内在奖励与训练,`next_obs`
+取 `obs[t+1]` 始终对应正确的转移。
 
-**与未来 RolloutBuffer 的关系**:一个规规矩矩存 `(obs, act, next_obs, rew, done)` 的 buffer 能让内在奖励
-几乎零成本挂上,A2C/PPO 也直接受益。本次**不做**大重构,只在 REINFORCE 内做局部 trace 存储;但
-`compute_intrinsic/update` 的签名以"一批 transition"为单位,正好对齐未来 buffer 的取数方式,不会返工。
+`PPO.train` 的改动(仅在 `intrinsic is not None` 时生效,否则零行为变化):
+
+1. `buffers, obs, prev_done, stats = self._collect_rollout(...)` 之后、`self._update(buffers)` 之前,
+   插入一个**批量内在奖励 pass**:
+   - 构造 `next_obs` buffer(如上);把 `valid` 的 `(obs, act, next_obs)` flatten 成 `(M, …)`。
+   - `r_int = intrinsic.compute_intrinsic(obs_v, act_v, next_obs_v)`(detached)。
+   - 把 `β·r_int` 按 valid 位置**加回** `buffers["rew"]`,得到合成回报。
+2. `self._update(buffers)` 照常:GAE 用合成回报计算,critic 学合成回报的 value,PPO clip 更新。
+3. `_update` 之后:`intrinsic.update(obs_v, act_v, next_obs_v)`,返回指标写 TensorBoard。
+4. **时序**:`compute_intrinsic`(收集后、更新前,用当前内在模型)→ PPO `_update`(不动内在模型)→
+   `intrinsic.update`。这满足 LPM"先用当前 dynamics 算奖励、再更新模型"的硬约束。PPO 每个 rollout
+   恰好一次收集 + 一次更新,天然对齐 LPM 的模型更新步 `τ`。
+
+内在奖励做成**批量 pass**(而非塞进 `_collect_rollout` 逐步计算):内在模型在一个 rollout 内不变,批量
+等价且更高效,也让 `_collect_rollout` 保持内在无关、干净。
+
+**checkpoint**:`save_local/load_local` 增加 `intrinsic.state_dict()` 的存取(仅当存在)。
 
 ## config / factory 集成
 
@@ -151,8 +166,8 @@ obs trace**。内在奖励需要 `(s_t, a_t, s_{t+1})` 三元组,所以:
 
 ```yaml
 agent:
-  id: REINFORCE
-  # ... 现有字段 ...
+  id: PPO
+  # ... 现有 PPO 字段(lr / gamma / clip_range / n_epochs / value_model ...) ...
   intrinsic_reward:          # 省略 => 纯外在
     id: RND                  # RND | ICM | LPM
     beta: 0.5
@@ -161,14 +176,16 @@ agent:
 ```
 
 - 新增 `minigridrl/intrinsic/factory.py:intrinsic_reward_factory(cfg) -> IntrinsicReward | None`。
-- `agent_factory` 读到 `intrinsic_reward` 块则构造并注入 REINFORCE(新增可选构造参数 `intrinsic=None`)。
-- 内在模块的 checkpoint 随 agent 一起 save/load(在 `save_local/load_local` 里加 `intrinsic.state_dict()`)。
+- `agent_factory` 的 PPO 分支读到 `intrinsic_reward` 块则构造并注入 PPO(`PPO.__init__` 新增可选参数
+  `intrinsic: IntrinsicReward | None = None`);缺省 = 纯外在。
+- 内在模块的 checkpoint 随 agent 一起 save/load(在 PPO `save_local/load_local` 里加 `intrinsic.state_dict()`)。
 
 ## TensorBoard 指标
 
-复用 `interface.py:tensorboard_write` 的 `None`=N/A 约定,新增:
+复用 `interface.py:tensorboard_write` 的 `None`=N/A 约定,在 PPO 现有指标之外新增:
 `intrinsic_reward_mean`、`intrinsic_reward_std`、方法自身 loss(`rnd_loss` / `icm_forward_loss` /
-`icm_inverse_loss` / `lpm_dynamics_loss` / `lpm_error_loss`)、`beta`。非当前方法的指标传 `None` 跳过。
+`icm_inverse_loss` / `lpm_dynamics_loss` / `lpm_error_loss`)、`beta`。无 intrinsic 或非当前方法的指标传
+`None` 跳过。
 
 ## 模块布局
 
@@ -184,21 +201,25 @@ minigridrl/intrinsic/
 
 ## 实现顺序与验证
 
-1. **阶段 1 — 抽象 + RND**:打通 REINFORCE 集成 seam。验证:Empty 环境上开/关 RND 都能训练,
-   TensorBoard 出现 intrinsic 指标,`intrinsic=None` 与改动前行为一致。
+1. **阶段 1 — 抽象 + RND**:打通 PPO 集成 seam。验证:`intrinsic=None` 时训练与改动前逐指标一致
+   (回归保护);开 RND 后 Empty 环境能训练,TensorBoard 出现 intrinsic 指标。
 2. **阶段 2 — ICM**:仅新增 `icm.py` + config 分支,不动 seam。
 3. **阶段 3 — LPM**:实现双 buffer + 更新周期 + error model。验证单调性直觉:模型改进时 `r_int` 为正。
 4. **对照实验**:在稀疏 MiniGrid(如 Empty-8x8 / DoorKey)上对比 无内在 / RND / ICM / LPM 的探索效率。
 
 ## 已知简化与未来
 
-- **单一合并回报**:未区分内在/外在的 discount 与 value(RND 原版做法),等 A2C/critic 后再升级。
+- **单一合并回报**:未区分内在/外在的 discount 与 value(RND 原版做法)。PPO 已有 critic,升级到双
+  value head(内在非 episodic、独立 discount)是纯增量,列为未来可选项。
 - **noisy-TV wrapper(紧接后续)**:无噪声时 RND/ICM/LPM 表现接近;要复现 LPM 的核心卖点,需一个向
   MiniGrid 观测注入 state-noise / action-triggered-noise 的 wrapper。列为本设计之后的第一个后续项。
 - **episodic bonus 家族**:接口以 transition 为单位,未来要支持 episodic memory 需扩展(非本次)。
 
 ## 开放问题(待用户确认)
 
-1. 上面三个默认(接入点 REINFORCE / 单一合并回报 / 三种全设计-分阶段实现)是否接受?
-2. LPM 的更新周期 `N` 对齐"每 rollout 一次"是否 OK,还是要支持更细的按环境步周期?
-3. 是否要把 noisy-TV wrapper 纳入本 spec,还是确实拆成紧接的下一个立项?
+三个主要分叉已确认(接入点 = PPO / 单一合并回报 / 三种全设计-分阶段实现)。剩余待确认:
+
+1. LPM 的更新周期 `N` 对齐"每 rollout 一次"是否 OK,还是要支持更细的按环境步周期?
+2. noisy-TV wrapper 确认拆成紧接的下一个立项(不纳入本 spec)?
+3. RND 的 obs 归一化用 running mean/std;是否要与后续可能的 `VecNormalize` 类 env-level 归一化统一,
+   还是内在模块自持一份即可(本设计取后者)?
