@@ -21,4 +21,8 @@ def intrinsic_reward_factory(cfg: dict[str, Any] | None) -> IntrinsicReward | No
         from .rnd import RND
         return RND(**common)
 
+    if id == "ICM":
+        from .icm import ICM
+        return ICM(**common)
+
     raise ValueError("Unsupported IntrinsicReward ID: " + str(id))
